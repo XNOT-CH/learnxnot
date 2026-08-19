@@ -20,6 +20,23 @@ import {
 import { loadVocabulary, loadStats, saveStats } from '../utils/storage.js';
 import { speakEnglish } from '../utils/speech.js';
 
+/* ============================================
+   เกณฑ์การจัดกลุ่มคำศัพท์ (ใช้ร่วมกันทั้งหน้า เพื่อให้ตัวเลขทุกจุดตรงกัน)
+   ============================================ */
+const MASTERY_MIN_ACCURACY = 80; // ความแม่นยำขั้นต่ำที่ถือว่าเชี่ยวชาญ
+const MASTERY_MIN_TESTS = 3;     // ต้องทดสอบอย่างน้อยกี่ครั้งจึงนับว่าเชี่ยวชาญ
+const REVIEW_MAX_ACCURACY = 50;  // ต่ำกว่านี้ถือว่าควรทบทวน
+
+/** คำที่ทดสอบแล้วและแม่นพอจะถือว่าเชี่ยวชาญ */
+const isMastered = (w) =>
+  w.tested && w.accuracy >= MASTERY_MIN_ACCURACY && w.total >= MASTERY_MIN_TESTS;
+
+/** คำที่เคยทดสอบแล้วแต่ยังไม่แม่น (คำที่ยังไม่เคยทดสอบไม่นับ — มีกลุ่มของตัวเอง) */
+const needsReview = (w) => w.tested && w.accuracy < REVIEW_MAX_ACCURACY;
+
+/** คำที่ยังไม่เคยถูกทดสอบเลย */
+const isUntested = (w) => !w.tested;
+
 /* ---- Circular Progress Ring (SVG) ---- */
 function CircularProgress({ percentage, size = 120, strokeWidth = 10 }) {
   const radius = (size - strokeWidth) / 2;
@@ -162,8 +179,6 @@ export default function StatsPage() {
   const computedStats = useMemo(() => {
     let totalCorrect = 0;
     let totalWrong = 0;
-    let mastered = 0;
-    let toReview = 0;
 
     const wordDetails = vocabulary.map((word) => {
       const s = stats[word.id] || { correct: 0, wrong: 0 };
@@ -172,10 +187,6 @@ export default function StatsPage() {
 
       totalCorrect += s.correct;
       totalWrong += s.wrong;
-
-      if (accuracy >= 80 && total >= 3) mastered++;
-      if (accuracy !== -1 && accuracy < 50) toReview++;
-      if (accuracy === -1) toReview++; // never tested counts as needing review
 
       return {
         ...word,
@@ -195,8 +206,9 @@ export default function StatsPage() {
       totalWords: vocabulary.length,
       totalTests,
       overallAccuracy,
-      mastered,
-      toReview,
+      mastered: wordDetails.filter(isMastered).length,
+      toReview: wordDetails.filter(needsReview).length,
+      untested: wordDetails.filter(isUntested).length,
       wordDetails,
     };
   }, [vocabulary, stats]);
@@ -204,14 +216,8 @@ export default function StatsPage() {
   /* ---- Words that need review (sorted by accuracy ascending) ---- */
   const wordsToReview = useMemo(() => {
     return computedStats.wordDetails
-      .filter((w) => w.accuracy < 50) // includes -1 (untested) and low accuracy
-      .sort((a, b) => {
-        // Untested words at the end of review list, lowest accuracy first
-        if (a.accuracy === -1 && b.accuracy === -1) return 0;
-        if (a.accuracy === -1) return 1;
-        if (b.accuracy === -1) return -1;
-        return a.accuracy - b.accuracy;
-      });
+      .filter(needsReview)
+      .sort((a, b) => a.accuracy - b.accuracy);
   }, [computedStats]);
 
   /* ---- Filtered & sorted word list ---- */
@@ -221,15 +227,13 @@ export default function StatsPage() {
     // Apply filter
     switch (filter) {
       case 'mastered':
-        list = list.filter((w) => w.accuracy >= 80 && w.total >= 3);
+        list = list.filter(isMastered);
         break;
       case 'review':
-        list = list.filter(
-          (w) => w.tested && w.accuracy < 50
-        );
+        list = list.filter(needsReview);
         break;
       case 'untested':
-        list = list.filter((w) => !w.tested);
+        list = list.filter(isUntested);
         break;
       default:
         break;
@@ -263,17 +267,15 @@ export default function StatsPage() {
   }, [computedStats, filter, sortField, sortAsc]);
 
   /* ---- Filter counts ---- */
-  const filterCounts = useMemo(() => {
-    const all = computedStats.wordDetails.length;
-    const mastered = computedStats.wordDetails.filter(
-      (w) => w.accuracy >= 80 && w.total >= 3
-    ).length;
-    const review = computedStats.wordDetails.filter(
-      (w) => w.tested && w.accuracy < 50
-    ).length;
-    const untested = computedStats.wordDetails.filter((w) => !w.tested).length;
-    return { all, mastered, review, untested };
-  }, [computedStats]);
+  const filterCounts = useMemo(
+    () => ({
+      all: computedStats.wordDetails.length,
+      mastered: computedStats.mastered,
+      review: computedStats.toReview,
+      untested: computedStats.untested,
+    }),
+    [computedStats]
+  );
 
   /* ---- Sort handler ---- */
   const handleSort = useCallback(
@@ -370,7 +372,9 @@ export default function StatsPage() {
               <Trophy size={40} className="mx-auto text-success" />
               <p className="font-semibold text-text-primary">ยอดเยี่ยม!</p>
               <p className="text-sm text-text-muted">
-                ไม่มีคำที่ต้องทบทวนในตอนนี้
+                {computedStats.untested > 0
+                  ? `ไม่มีคำที่ต้องทบทวน แต่ยังมีอีก ${computedStats.untested} คำที่ยังไม่เคยทดสอบ`
+                  : 'ไม่มีคำที่ต้องทบทวนในตอนนี้'}
               </p>
             </div>
           ) : (
@@ -417,6 +421,12 @@ export default function StatsPage() {
               {wordsToReview.length > 10 && (
                 <p className="text-center text-sm text-text-muted pt-1">
                   และอีก {wordsToReview.length - 10} คำ...
+                </p>
+              )}
+
+              {computedStats.untested > 0 && (
+                <p className="text-center text-sm text-text-muted pt-1">
+                  ยังมีอีก {computedStats.untested} คำที่ยังไม่เคยทดสอบ
                 </p>
               )}
             </div>

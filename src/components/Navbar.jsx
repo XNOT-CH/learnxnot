@@ -19,6 +19,9 @@ const NAV_ITEMS = [
   { to: '/stats', label: 'สถิติ', icon: BarChart3 },    // Statistics
 ];
 
+// id ของเมนูมือถือ (ใช้ผูก aria-controls กับปุ่มแฮมเบอร์เกอร์)
+const MOBILE_MENU_ID = 'navbar-mobile-menu';
+
 export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -98,6 +101,7 @@ export default function Navbar() {
             className="md:hidden flex items-center justify-center w-10 h-10 rounded-lg text-text-secondary hover:bg-primary-50 hover:text-primary-600 transition-colors duration-200"
             aria-label={mobileOpen ? 'ปิดเมนู' : 'เปิดเมนู'}
             aria-expanded={mobileOpen}
+            aria-controls={MOBILE_MENU_ID}
           >
             {mobileOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
@@ -105,10 +109,19 @@ export default function Navbar() {
       </div>
 
       {/* ─── Mobile dropdown menu ─── */}
+      {/*
+        ตอนปิดเมนูต้องซ่อนจาก keyboard และ screen reader ด้วย
+        (max-h-0 อย่างเดียวยัง tab เข้าไปโดนลิงก์ที่มองไม่เห็นได้)
+      */}
       <div
+        id={MOBILE_MENU_ID}
+        aria-hidden={!mobileOpen}
+        inert={!mobileOpen}
         className={[
           'md:hidden overflow-hidden transition-all duration-300 ease-in-out',
-          mobileOpen ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0',
+          mobileOpen
+            ? 'max-h-64 opacity-100'
+            : 'max-h-0 opacity-0 invisible pointer-events-none',
         ].join(' ')}
       >
         <div className="px-4 pb-4 pt-1 flex flex-col gap-1 border-t border-border">

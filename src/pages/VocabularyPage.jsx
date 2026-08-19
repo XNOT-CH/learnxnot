@@ -31,6 +31,7 @@ import {
   migrateData,
   exportData,
   importData,
+  validateBackup,
 } from '../utils/storage';
 import { speakEnglish } from '../utils/speech';
 import { generateId } from '../utils/quiz';
@@ -55,6 +56,7 @@ export default function VocabularyPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [movingWordId, setMovingWordId] = useState(null); // word being moved to another category
+  const [formError, setFormError] = useState(''); // ข้อความเตือนของฟอร์มคำศัพท์ เช่น คำซ้ำ
 
   // --- Backup (import/export) state ---
   const [importPreview, setImportPreview] = useState(null); // parsed data awaiting confirm
@@ -138,6 +140,7 @@ export default function VocabularyPage() {
     setThai('');
     setSearchQuery('');
     setDeleteConfirmId(null);
+    setFormError('');
   };
 
   // ============================================
@@ -161,7 +164,26 @@ export default function VocabularyPage() {
     e.preventDefault();
     const trimmedEn = english.trim();
     const trimmedTh = thai.trim();
-    if (!trimmedEn || !trimmedTh) return;
+    if (!trimmedEn || !trimmedTh) {
+      setFormError('กรุณากรอกทั้งคำภาษาอังกฤษและคำแปลภาษาไทย');
+      return;
+    }
+
+    // กันคำซ้ำภายในหมวดเดียวกัน (ไม่สนตัวพิมพ์เล็ก-ใหญ่)
+    const duplicate = vocabulary.find(
+      (w) =>
+        w.categoryId === selectedCategoryId &&
+        w.id !== editingId &&
+        w.english.trim().toLowerCase() === trimmedEn.toLowerCase()
+    );
+    if (duplicate) {
+      setFormError(
+        `มีคำว่า "${duplicate.english}" อยู่ในหมวดนี้แล้ว (แปลว่า ${duplicate.thai})`
+      );
+      englishInputRef.current?.focus();
+      return;
+    }
+    setFormError('');
 
     if (editingId) {
       setVocabulary((prev) =>
@@ -186,6 +208,7 @@ export default function VocabularyPage() {
   };
 
   const handleEdit = (word) => {
+    setFormError('');
     setEditingId(word.id);
     setEnglish(word.english);
     setThai(word.thai);
@@ -197,6 +220,7 @@ export default function VocabularyPage() {
     setEditingId(null);
     setEnglish('');
     setThai('');
+    setFormError('');
   };
 
   const handleDelete = (id) => {
@@ -251,14 +275,20 @@ export default function VocabularyPage() {
 
     const reader = new FileReader();
     reader.onload = () => {
+      let parsed;
       try {
-        const parsed = JSON.parse(reader.result);
-        if (!Array.isArray(parsed.vocabulary) || !Array.isArray(parsed.categories)) {
-          throw new Error('รูปแบบไฟล์ไม่ถูกต้อง');
-        }
-        setImportPreview(parsed);
+        parsed = JSON.parse(reader.result);
       } catch {
         setImportError('ไฟล์ไม่ถูกต้อง — กรุณาเลือกไฟล์สำรองของ LearnXNot');
+        return;
+      }
+      try {
+        // ตรวจและทำความสะอาดข้อมูลก่อน เพื่อให้ตัวเลขในหน้ายืนยันตรงกับที่จะนำเข้าจริง
+        setImportPreview(validateBackup(parsed));
+      } catch (err) {
+        setImportError(
+          err.message || 'ไฟล์ไม่ถูกต้อง — กรุณาเลือกไฟล์สำรองของ LearnXNot'
+        );
       }
     };
     reader.onerror = () => setImportError('อ่านไฟล์ไม่สำเร็จ');
@@ -355,6 +385,19 @@ export default function VocabularyPage() {
                   ไฟล์นี้มี {importPreview.categories.length} หมวด และ{' '}
                   {importPreview.vocabulary.length} คำ
                 </p>
+                {(importPreview.skipped.words > 0 ||
+                  importPreview.skipped.categories > 0) && (
+                  <p className="text-xs text-warning">
+                    ข้ามรายการที่ข้อมูลไม่ครบ{' '}
+                    {importPreview.skipped.categories > 0 &&
+                      `${importPreview.skipped.categories} หมวด`}
+                    {importPreview.skipped.categories > 0 &&
+                      importPreview.skipped.words > 0 &&
+                      ' และ '}
+                    {importPreview.skipped.words > 0 &&
+                      `${importPreview.skipped.words} คำ`}
+                  </p>
+                )}
                 <p className="text-xs text-error">
                   ⚠️ ข้อมูลปัจจุบันทั้งหมดจะถูกแทนที่และไม่สามารถกู้คืนได้
                 </p>
@@ -595,7 +638,12 @@ export default function VocabularyPage() {
               id="english-input"
               type="text"
               value={english}
-              onChange={(e) => setEnglish(e.target.value)}
+              onChange={(e) => {
+                setEnglish(e.target.value);
+                if (formError) setFormError('');
+              }}
+              aria-invalid={formError ? true : undefined}
+              aria-describedby={formError ? 'word-form-error' : undefined}
               placeholder="English word, e.g. cat"
               className="w-full rounded-xl border border-border bg-white/80 px-4 py-2.5 text-text-primary
                          placeholder:text-text-muted
@@ -624,6 +672,17 @@ export default function VocabularyPage() {
               คั่นหลายคำตอบด้วยเครื่องหมาย , (comma)
             </p>
           </div>
+
+          {/* Inline error (เช่น คำซ้ำในหมวดเดียวกัน) */}
+          {formError && (
+            <p
+              id="word-form-error"
+              role="alert"
+              className="rounded-xl bg-error-light/60 px-3 py-2 text-sm text-error"
+            >
+              {formError}
+            </p>
+          )}
 
           {/* Action buttons */}
           <div className="flex items-center gap-3">

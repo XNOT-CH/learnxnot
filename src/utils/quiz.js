@@ -68,7 +68,12 @@ export function checkAnswer(userAnswer, correctAnswer) {
 
 /**
  * สร้าง unique ID
+ * ใช้ crypto.randomUUID() ถ้าเบราว์เซอร์รองรับ ไม่งั้นถอยไปใช้ timestamp + random
+ * @returns {string} ID ที่ไม่ซ้ำกัน
  */
 export function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 11);
 }

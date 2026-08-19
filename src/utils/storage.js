@@ -11,6 +11,23 @@ const CATEGORY_KEY = 'learnxnot_categories';
 export const DEFAULT_CATEGORY_ID = 'default';
 
 /**
+ * เขียนข้อมูลลง localStorage อย่างปลอดภัย
+ * (พื้นที่เต็มหรือโหมดส่วนตัวอาจทำให้ setItem โยน error ได้ — ไม่ควรทำให้ทั้งแอปพัง)
+ * @param {string} key - คีย์ที่ต้องการเขียน
+ * @param {unknown} value - ข้อมูลที่จะเก็บ (จะถูกแปลงเป็น JSON)
+ * @returns {boolean} true ถ้าบันทึกสำเร็จ
+ */
+function writeKey(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (err) {
+    console.error(`บันทึกข้อมูลลง localStorage ไม่สำเร็จ (${key})`, err);
+    return false;
+  }
+}
+
+/**
  * โหลดรายการคำศัพท์ทั้งหมดจาก localStorage
  * @returns {Array} รายการคำศัพท์
  */
@@ -28,7 +45,7 @@ export function loadVocabulary() {
  * @param {Array} vocab - รายการคำศัพท์
  */
 export function saveVocabulary(vocab) {
-  localStorage.setItem(VOCAB_KEY, JSON.stringify(vocab));
+  return writeKey(VOCAB_KEY, vocab);
 }
 
 /**
@@ -49,7 +66,7 @@ export function loadStats() {
  * @param {Object} stats - สถิติทั้งหมด
  */
 export function saveStats(stats) {
-  localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  return writeKey(STATS_KEY, stats);
 }
 
 /**
@@ -93,7 +110,7 @@ export function loadCategories() {
  * @param {Array} categories - รายการหมวดหมู่
  */
 export function saveCategories(categories) {
-  localStorage.setItem(CATEGORY_KEY, JSON.stringify(categories));
+  return writeKey(CATEGORY_KEY, categories);
 }
 
 /**
@@ -150,25 +167,115 @@ export function exportData() {
 }
 
 /**
- * นำเข้าข้อมูลจากไฟล์สำรอง (แทนที่ข้อมูลเดิมทั้งหมด)
+ * ตรวจสอบและทำความสะอาดข้อมูลสำรองก่อนนำเข้า
+ * ทิ้งรายการที่โครงสร้างไม่ถูกต้อง แทนที่จะปล่อยให้ไปพังตอน render
  * @param {Object} data - ข้อมูลที่ parse จากไฟล์ JSON
- * @returns {{ categories: Array, vocabulary: Array, stats: Object }} ข้อมูลหลังนำเข้า
- * @throws {Error} ถ้าไฟล์ไม่ถูกต้อง
+ * @returns {{ categories: Array, vocabulary: Array, stats: Object, skipped: { categories: number, words: number } }}
+ * @throws {Error} ถ้าไฟล์ไม่ถูกต้องจนใช้งานไม่ได้
  */
-export function importData(data) {
-  if (!data || typeof data !== 'object') {
+export function validateBackup(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('ไฟล์ข้อมูลไม่ถูกต้อง');
   }
   if (!Array.isArray(data.vocabulary) || !Array.isArray(data.categories)) {
     throw new Error('รูปแบบไฟล์ไม่ถูกต้อง (ต้องมี categories และ vocabulary)');
   }
 
-  const categories = data.categories;
-  const vocabulary = data.vocabulary;
-  const stats =
+  const isNonEmptyString = (v) => typeof v === 'string' && v.trim() !== '';
+
+  // --- หมวดหมู่: ต้องมี id และ name ที่เป็นข้อความ, id ห้ามซ้ำ ---
+  const seenCategoryIds = new Set();
+  const categories = [];
+  for (const cat of data.categories) {
+    if (!cat || typeof cat !== 'object') continue;
+    if (!isNonEmptyString(cat.id) || !isNonEmptyString(cat.name)) continue;
+    if (seenCategoryIds.has(cat.id)) continue;
+    seenCategoryIds.add(cat.id);
+    categories.push({
+      id: cat.id,
+      name: cat.name.trim(),
+      createdAt: Number.isFinite(cat.createdAt) ? cat.createdAt : Date.now(),
+    });
+  }
+
+  // --- คำศัพท์: ต้องมี id, english, thai ที่เป็นข้อความ ---
+  const seenWordIds = new Set();
+  const vocabulary = [];
+  for (const word of data.vocabulary) {
+    if (!word || typeof word !== 'object') continue;
+    if (
+      !isNonEmptyString(word.id) ||
+      !isNonEmptyString(word.english) ||
+      !isNonEmptyString(word.thai)
+    ) {
+      continue;
+    }
+    if (seenWordIds.has(word.id)) continue;
+    seenWordIds.add(word.id);
+
+    // คำที่อ้างถึงหมวดหมู่ที่ไม่มีอยู่จริง ให้ย้ายไปหมวดเริ่มต้น
+    const categoryId = seenCategoryIds.has(word.categoryId)
+      ? word.categoryId
+      : DEFAULT_CATEGORY_ID;
+
+    vocabulary.push({
+      id: word.id,
+      english: word.english.trim(),
+      thai: word.thai.trim(),
+      categoryId,
+    });
+  }
+
+  // นับจำนวนหมวดที่ถูกข้ามไว้ก่อน (ก่อนจะเติมหมวดเริ่มต้นให้อัตโนมัติ)
+  const skippedCategories = data.categories.length - categories.length;
+
+  // ถ้ามีคำที่ต้องย้ายไปหมวดเริ่มต้น แต่ยังไม่มีหมวดนั้น ให้สร้างให้
+  const needsDefault = vocabulary.some((w) => w.categoryId === DEFAULT_CATEGORY_ID);
+  if (needsDefault && !seenCategoryIds.has(DEFAULT_CATEGORY_ID)) {
+    categories.unshift({
+      id: DEFAULT_CATEGORY_ID,
+      name: 'ทั่วไป',
+      createdAt: Date.now(),
+    });
+    seenCategoryIds.add(DEFAULT_CATEGORY_ID);
+  }
+
+  // --- สถิติ: เก็บเฉพาะของคำที่ยังมีอยู่ และเป็นตัวเลขที่ถูกต้อง ---
+  const stats = {};
+  const rawStats =
     data.stats && typeof data.stats === 'object' && !Array.isArray(data.stats)
       ? data.stats
       : {};
+  for (const [id, stat] of Object.entries(rawStats)) {
+    if (!seenWordIds.has(id) || !stat || typeof stat !== 'object') continue;
+    const correct = Number.isFinite(stat.correct) ? Math.max(0, stat.correct) : 0;
+    const wrong = Number.isFinite(stat.wrong) ? Math.max(0, stat.wrong) : 0;
+    stats[id] = { correct, wrong };
+  }
+
+  if (vocabulary.length === 0 && categories.length === 0) {
+    throw new Error('ไฟล์นี้ไม่มีข้อมูลที่ใช้งานได้');
+  }
+
+  return {
+    categories,
+    vocabulary,
+    stats,
+    skipped: {
+      categories: skippedCategories,
+      words: data.vocabulary.length - vocabulary.length,
+    },
+  };
+}
+
+/**
+ * นำเข้าข้อมูลจากไฟล์สำรอง (แทนที่ข้อมูลเดิมทั้งหมด)
+ * @param {Object} data - ข้อมูลที่ parse จากไฟล์ JSON
+ * @returns {{ categories: Array, vocabulary: Array, stats: Object }} ข้อมูลหลังนำเข้า
+ * @throws {Error} ถ้าไฟล์ไม่ถูกต้อง
+ */
+export function importData(data) {
+  const { categories, vocabulary, stats } = validateBackup(data);
 
   saveCategories(categories);
   saveVocabulary(vocabulary);

@@ -100,7 +100,6 @@ export default function QuizPage() {
   const [vocabulary, setVocabulary] = useState([]);
   const [categories, setCategories] = useState([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('all'); // 'all' | category id
-  const [stats, setStats] = useState({});
   const [quizMode, setQuizMode] = useState(null); // 'en-to-th' | 'th-to-en'
   const [questionCount, setQuestionCount] = useState('all');
   const [quizState, setQuizState] = useState('select'); // 'select' | 'active' | 'results'
@@ -121,7 +120,6 @@ export default function QuizPage() {
   useEffect(() => {
     setVocabulary(loadVocabulary());
     setCategories(loadCategories());
-    setStats(loadStats());
   }, []);
 
   // --- Words within the currently selected category scope ---
@@ -141,10 +139,10 @@ export default function QuizPage() {
 
   // --- Focus input when question changes ---
   useEffect(() => {
-    if (quizState === 'active' && feedback === null) {
-      // Small delay so the DOM updates first
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
+    if (quizState !== 'active' || feedback !== null) return;
+    // Small delay so the DOM updates first
+    const timer = setTimeout(() => inputRef.current?.focus(), 100);
+    return () => clearTimeout(timer);
   }, [currentIndex, quizState, feedback]);
 
   // ============================================
@@ -240,6 +238,11 @@ export default function QuizPage() {
   // Restart quiz
   // ============================================
   const restartQuiz = useCallback(() => {
+    // ยกเลิก timer ที่อาจยังค้างอยู่ ก่อนกลับไปหน้าเลือกโหมด
+    if (feedbackTimeoutRef.current) {
+      clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = null;
+    }
     setQuizState('select');
     setQuizMode(null);
     setFeedback(null);
@@ -248,7 +251,6 @@ export default function QuizPage() {
     // Reload fresh data
     setVocabulary(loadVocabulary());
     setCategories(loadCategories());
-    setStats(loadStats());
   }, []);
 
   // ============================================
